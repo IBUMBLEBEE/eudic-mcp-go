@@ -1,0 +1,5 @@
+# Binaries / local secrets
+eudic-mcp-go.exe
+eudic-mcp-go
+.env
+*.exe
