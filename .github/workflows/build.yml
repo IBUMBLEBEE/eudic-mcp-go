@@ -1,0 +1,56 @@
+name: Build
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build
+        run: bash scripts/build.sh
+
+      - name: Pack release assets
+        run: |
+          mkdir -p release
+          cp dist/linux-amd64/eudic-mcp-go release/eudic-mcp-go-linux-amd64
+          cp dist/linux-arm64/eudic-mcp-go release/eudic-mcp-go-linux-arm64
+          cp dist/windows-amd64/eudic-mcp-go.exe release/eudic-mcp-go-windows-amd64.exe
+          chmod +x release/eudic-mcp-go-linux-*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: eudic-mcp-go
+          path: release/*
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
