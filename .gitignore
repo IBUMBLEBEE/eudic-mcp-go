@@ -1,6 +1,7 @@
 # Binaries / local secrets
 eudic-mcp-go.exe
 eudic-mcp-go
+eudic-mcp-go-linux-*
 dist/
 .env
 *.exe

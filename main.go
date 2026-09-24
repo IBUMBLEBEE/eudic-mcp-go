@@ -15,7 +15,7 @@ import (
 func main() {
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "eudic-mcp-go",
-		Version: "1.0.0",
+		Version: "1.1.0",
 	}, nil)
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -82,6 +82,20 @@ func main() {
 		Name:        "eudic_add_note",
 		Description: "为某个单词添加或更新笔记。",
 	}, addNote)
+
+	destructive := true
+	closedWorld := false
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "eudic_sync_coaching",
+		Title:       "同步英语辅导",
+		Description: "将一次英语辅导的词条、例句和笔记一次性同步到欧路词典；自动查找或创建分组。英语辅导场景优先使用此工具，避免逐项调用 add_word 和 add_note。",
+		Annotations: &mcp.ToolAnnotations{
+			DestructiveHint: &destructive,
+			IdempotentHint:  true,
+			OpenWorldHint:   &closedWorld,
+			ReadOnlyHint:    false,
+		},
+	}, syncCoaching)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "eudic_delete_note",
@@ -155,11 +169,11 @@ type listWordsIn struct {
 }
 
 type addWordIn struct {
-	Word         string `json:"word" jsonschema:"要添加的单词"`
-	CategoryIDs  []any  `json:"category_ids,omitempty" jsonschema:"分组 id 列表"`
-	Star         int    `json:"star,omitempty" jsonschema:"星级 1-5，默认 2"`
-	ContextLine  string `json:"context_line,omitempty" jsonschema:"语境例句"`
-	Language     string `json:"language,omitempty" jsonschema:"语言代码，默认 en"`
+	Word        string `json:"word" jsonschema:"要添加的单词"`
+	CategoryIDs []any  `json:"category_ids,omitempty" jsonschema:"分组 id 列表"`
+	Star        int    `json:"star,omitempty" jsonschema:"星级 1-5，默认 2"`
+	ContextLine string `json:"context_line,omitempty" jsonschema:"语境例句"`
+	Language    string `json:"language,omitempty" jsonschema:"语言代码，默认 en"`
 }
 
 type addWordsBulkIn struct {
@@ -196,6 +210,23 @@ type addNoteIn struct {
 	Word     string `json:"word" jsonschema:"单词"`
 	Note     string `json:"note" jsonschema:"笔记内容"`
 	Language string `json:"language,omitempty" jsonschema:"语言代码，默认 en"`
+}
+
+type syncCoachingEntryIn struct {
+	Word        string `json:"word" jsonschema:"词条或短语"`
+	ContextLine string `json:"context_line,omitempty" jsonschema:"例句；优先进阶句，否则使用修正或翻译后的完整句子"`
+	Note        string `json:"note" jsonschema:"完整的双语学习笔记"`
+	Star        int    `json:"star,omitempty" jsonschema:"星级 1-5，默认 3"`
+}
+
+type syncCoachingIn struct {
+	Category string                `json:"category,omitempty" jsonschema:"生词本分组名称，默认 english-coach"`
+	Language string                `json:"language,omitempty" jsonschema:"语言代码，默认 en"`
+	Entries  []syncCoachingEntryIn `json:"entries" jsonschema:"本回合要同步的词条，最多 5 个"`
+}
+
+type syncCoachingOut struct {
+	Synced int `json:"synced" jsonschema:"成功同步的词条数"`
 }
 
 func listCategories(ctx context.Context, _ *mcp.CallToolRequest, in languageIn) (*mcp.CallToolResult, any, error) {
@@ -372,6 +403,59 @@ func addNote(ctx context.Context, _ *mcp.CallToolRequest, in addNoteIn) (*mcp.Ca
 		return apiFail(err)
 	}
 	return jsonResult(out)
+}
+
+func syncCoaching(ctx context.Context, _ *mcp.CallToolRequest, in syncCoachingIn) (*mcp.CallToolResult, syncCoachingOut, error) {
+	if len(in.Entries) == 0 {
+		return typedFail(fmt.Errorf("entries is required"))
+	}
+	if len(in.Entries) > 5 {
+		return typedFail(fmt.Errorf("entries must contain at most 5 items"))
+	}
+
+	category := strings.TrimSpace(in.Category)
+	if category == "" {
+		category = "english-coach"
+	}
+	entries := make([]eudic.SyncEntry, 0, len(in.Entries))
+	for i, entry := range in.Entries {
+		if strings.TrimSpace(entry.Word) == "" || strings.TrimSpace(entry.Note) == "" {
+			return typedFail(fmt.Errorf("entry %d: word and note are required", i+1))
+		}
+		star := entry.Star
+		if star <= 0 {
+			star = 3
+		}
+		if star > 5 {
+			return typedFail(fmt.Errorf("entry %d: star must be between 1 and 5", i+1))
+		}
+		entries = append(entries, eudic.SyncEntry{
+			Word:        strings.TrimSpace(entry.Word),
+			ContextLine: entry.ContextLine,
+			Note:        entry.Note,
+			Star:        star,
+		})
+	}
+
+	c, fail, err := clientOrErr()
+	if fail != nil {
+		return fail, syncCoachingOut{}, nil
+	}
+	if err != nil {
+		return nil, syncCoachingOut{}, err
+	}
+	synced, err := c.SyncEntries(ctx, category, in.Language, entries)
+	if err != nil {
+		return typedFail(err)
+	}
+	return nil, syncCoachingOut{Synced: synced}, nil
+}
+
+func typedFail(err error) (*mcp.CallToolResult, syncCoachingOut, error) {
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
+		IsError: true,
+	}, syncCoachingOut{}, nil
 }
 
 func deleteNote(ctx context.Context, _ *mcp.CallToolRequest, in wordIn) (*mcp.CallToolResult, any, error) {

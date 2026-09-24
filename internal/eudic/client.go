@@ -27,6 +27,14 @@ type Client struct {
 	BaseURL    string
 }
 
+// SyncEntry is one study-list item written by SyncEntries.
+type SyncEntry struct {
+	Word        string
+	ContextLine string
+	Note        string
+	Star        int
+}
+
 // NewClientFromEnv builds a client using EUDIC_API_TOKEN (no "NIS " prefix).
 func NewClientFromEnv() (*Client, error) {
 	token := strings.TrimSpace(os.Getenv("EUDIC_API_TOKEN"))
@@ -266,6 +274,106 @@ func (c *Client) AddNote(ctx context.Context, word, note, language string) (any,
 		"word":     word,
 		"note":     note,
 	})
+}
+
+// SyncEntries resolves (or creates) a category, then writes every word and
+// note. It is the single-call path used by integrations that do not need each
+// underlying Eudic API operation surfaced separately.
+func (c *Client) SyncEntries(ctx context.Context, categoryName, language string, entries []SyncEntry) (int, error) {
+	categoryName = strings.TrimSpace(categoryName)
+	if categoryName == "" {
+		return 0, fmt.Errorf("category name is required")
+	}
+
+	categories, err := c.ListCategories(ctx, language)
+	if err != nil {
+		return 0, err
+	}
+	categoryID, ok := findCategoryID(categories, categoryName)
+	if !ok {
+		created, err := c.CreateCategory(ctx, categoryName, language)
+		if err != nil {
+			return 0, err
+		}
+		categoryID, ok = findCategoryID(created, categoryName)
+		if !ok {
+			categoryID, ok = findFirstCategoryID(created)
+		}
+		if !ok {
+			return 0, fmt.Errorf("created category %q but response contained no category id", categoryName)
+		}
+	}
+
+	for i, entry := range entries {
+		word := strings.TrimSpace(entry.Word)
+		if word == "" {
+			return i, fmt.Errorf("entry %d: word is required", i+1)
+		}
+		if strings.TrimSpace(entry.Note) == "" {
+			return i, fmt.Errorf("entry %d (%s): note is required", i+1, word)
+		}
+		if _, err := c.AddWord(ctx, word, language, []string{categoryID}, entry.Star, entry.ContextLine); err != nil {
+			return i, fmt.Errorf("entry %d (%s): add word: %w", i+1, word, err)
+		}
+		if _, err := c.AddNote(ctx, word, entry.Note, language); err != nil {
+			return i, fmt.Errorf("entry %d (%s): add note: %w", i+1, word, err)
+		}
+	}
+	return len(entries), nil
+}
+
+func findCategoryID(v any, name string) (string, bool) {
+	switch value := v.(type) {
+	case map[string]any:
+		if categoryName, ok := value["name"].(string); ok && categoryName == name {
+			for _, key := range []string{"id", "category_id", "categoryId"} {
+				if id, exists := value[key]; exists {
+					normalized := IDString(id)
+					if normalized != "0" {
+						return normalized, true
+					}
+				}
+			}
+		}
+		for _, child := range value {
+			if id, ok := findCategoryID(child, name); ok {
+				return id, true
+			}
+		}
+	case []any:
+		for _, child := range value {
+			if id, ok := findCategoryID(child, name); ok {
+				return id, true
+			}
+		}
+	}
+	return "", false
+}
+
+func findFirstCategoryID(v any) (string, bool) {
+	switch value := v.(type) {
+	case map[string]any:
+		for _, key := range []string{"id", "category_id", "categoryId"} {
+			if id, exists := value[key]; exists {
+				normalized := IDString(id)
+				if normalized != "0" {
+					return normalized, true
+				}
+			}
+		}
+		for _, child := range value {
+			if id, ok := findFirstCategoryID(child); ok {
+				return id, true
+			}
+		}
+	case []any:
+		for _, child := range value {
+			if id, ok := findFirstCategoryID(child); ok {
+				return id, true
+			}
+		}
+	}
+	return "", false
 }
 
 func (c *Client) DeleteNote(ctx context.Context, word, language string) (any, error) {

@@ -14,6 +14,7 @@
 | `eudic_list_words` / `eudic_add_word` / `eudic_add_words_bulk` / `eudic_delete_words` | 单词读写 |
 | `eudic_get_word` / `eudic_list_mastered_words` | 查询单词 / 已掌握 |
 | `eudic_list_notes` / `eudic_get_note` / `eudic_add_note` / `eudic_delete_note` | 笔记 |
+| `eudic_sync_coaching` | 单次同步一回合英语辅导的词条、例句和笔记，并自动解析分组 |
 | `eudic_list_sentences` | 用户例句列表 |
 
 ## 构建
@@ -81,7 +82,7 @@ powershell -File scripts/build.ps1   # Windows
 
 ## english-coach
 
-生词本名 **`english-coach`**：`list_categories` → 必要时 `create_category` → `add_word` / `add_note`。
+生词本名 **`english-coach`**。优先调用一次 `eudic_sync_coaching`；服务端会解析或创建分组，再写入最多 5 个词条及其笔记。
 
 ## 致谢
 
